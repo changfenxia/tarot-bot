@@ -1,18 +1,31 @@
 import os
 import logging
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Load environment variables before importing constants
+env_path = Path(__file__).parent.parent / '.env'
+logger.info(f"Loading environment variables from: {env_path}")
+load_dotenv(env_path)
+
 import asyncio
 from datetime import datetime, timedelta
 import random
-from dotenv import load_dotenv
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yandex_gpt import YandexGPTClient
 import json
-from pathlib import Path
 import signal
 import atexit
 import fcntl
-from constants import TAROT_CARDS
+from constants import TAROT_CARDS, ADMIN_USER_IDS
 from database import Database
 from messages import (
     WELCOME_MESSAGE, COOLDOWN_MESSAGE, READING_START,
@@ -22,21 +35,6 @@ from messages import (
     MYSTICAL_POWERS_UNAVAILABLE, ORACLE_MEDITATION,
     CLOSING_MESSAGE, ERROR_MESSAGE
 )
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-log_file = Path(__file__).resolve().parent.parent / "bot.log"
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
 
 # Configure paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -136,6 +134,74 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     await update.message.reply_text(WELCOME_MESSAGE)
 
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stats command - show bot statistics (admin only)"""
+    user_id = update.effective_user.id
+    logger.info(f"Stats command requested by user {user_id} (type: {type(user_id)})")
+    logger.info(f"Current admin IDs: {ADMIN_USER_IDS} (types: {[type(aid) for aid in ADMIN_USER_IDS]})")
+    
+    try:
+        if not ADMIN_USER_IDS:
+            logger.warning("Admin IDs list is empty!")
+            await update.message.reply_text("⚠️ Список администраторов пуст. Обратитесь к разработчику бота.")
+            return
+            
+        if user_id not in ADMIN_USER_IDS:
+            logger.warning(f"Access denied for user {user_id} - not in admin list {ADMIN_USER_IDS}")
+            await update.message.reply_text("⛔️ Эта команда доступна только администраторам бота.")
+            return
+        
+        logger.info(f"Access granted for admin {user_id}")
+        # Get days parameter if provided
+        try:
+            days = int(context.args[0]) if context.args else 7
+        except (ValueError, IndexError):
+            days = 7
+        
+        stats = await db.get_user_stats(days)
+        if not stats:
+            await update.message.reply_text("❌ Не удалось получить статистику.")
+            return
+        
+        # Format statistics message
+        message = f"📊 *Статистика бота за {stats['period_days']} дней:*\n\n"
+        message += f"📝 Всего запросов: {stats['total_requests']}\n"
+        message += f"👥 Уникальных пользователей: {stats['unique_users']}\n"
+        message += f"✅ Успешных запросов: {stats['successful_requests']}\n"
+        message += f"❌ Неудачных запросов: {stats['failed_requests']}\n\n"
+        
+        if stats['top_users']:
+            message += "*👑 Самые активные пользователи:*\n"
+            for username, count in stats['top_users']:
+                message += f"- {username}: {count} запросов\n"
+            message += "\n"
+        
+        if stats['top_questions']:
+            message += "*❓ Популярные вопросы:*\n"
+            for question, count in stats['top_questions']:
+                # Truncate long questions
+                short_q = question[:50] + "..." if len(question) > 50 else question
+                message += f"- {short_q} ({count} раз)\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Error during stats command: {e}")
+        await update.message.reply_text("❌ Ошибка при получении статистики.")
+
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user their Telegram ID"""
+    user = update.effective_user
+    message = f"🆔 *Ваша информация:*\n"
+    message += f"• ID: `{user.id}`\n"
+    message += f"• Имя пользователя: {user.username or 'не указано'}\n"
+    message += f"• Полное имя: {user.full_name}\n\n"
+    
+    if user.id in ADMIN_USER_IDS:
+        message += "👑 Вы являетесь администратором бота"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and perform tarot reading."""
     user_id = update.effective_user.id
@@ -146,7 +212,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Check cooldown
         logger.info(f"Checking cooldown for user {user_id}")
-        if await db.is_on_cooldown(user_id, cooldown_seconds=60):
+        if await db.is_on_cooldown(user_id, cooldown_seconds=86400):  # 24 hours = 86400 seconds
             logger.info(f"User {user_id} is on cooldown")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -161,6 +227,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Generate three random cards
         cards = random.sample(list(TAROT_CARDS.keys()), 3)
         logger.info(f"Generated cards for user {user_id}: {cards}")
+        
+        # Log the request
+        await db.log_request(
+            user_id=user_id,
+            username=update.effective_user.username,
+            question=question,
+            cards=cards,
+            success=True
+        )
 
         # Initial message
         await context.bot.send_message(
@@ -228,6 +303,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Error handling message: {e}")
+        # Log failed request
+        await db.log_request(
+            user_id=user_id,
+            username=update.effective_user.username,
+            question=question,
+            cards=[],
+            success=False
+        )
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=ERROR_MESSAGE
@@ -260,17 +343,15 @@ class TarotBot:
         
     async def initialize(self):
         """Initialize bot components."""
-        # Initialize database
-        logger.info("Initializing database...")
-        await db.init()
-        logger.info("Database initialized successfully")
+        if self.application:
+            return
 
-        # Create the Application
-        logger.info("Creating Telegram application...")
         self.application = Application.builder().token(os.getenv('TELEGRAM_TOKEN')).build()
-
-        # Add handlers
+        
+        # Initialize handlers
         self.application.add_handler(CommandHandler("start", start))
+        self.application.add_handler(CommandHandler("stats", stats_command))
+        self.application.add_handler(CommandHandler("id", id_command))  
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
     async def start(self):
