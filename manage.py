@@ -3,45 +3,100 @@ import os
 import sys
 import signal
 import subprocess
+import time
 from pathlib import Path
+import logging
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 BOT_DIR = Path(__file__).resolve().parent
 PID_FILE = BOT_DIR / "bot.pid"
+LOCK_FILE = BOT_DIR / "bot.lock"
 VENV_PYTHON = BOT_DIR / "venv" / "bin" / "python"
 
+def cleanup_files():
+    """Remove PID and lock files if they exist."""
+    for file in [PID_FILE, LOCK_FILE]:
+        try:
+            if file.exists():
+                file.unlink()
+                logger.info(f"Removed {file}")
+        except Exception as e:
+            logger.error(f"Error removing {file}: {e}")
+
 def start_bot():
-    if PID_FILE.exists():
-        print("Bot already running or PID file exists")
-        return
+    cleanup_files()  # Clean up any stale files before starting
     
-    process = subprocess.Popen(
-        [str(VENV_PYTHON), "app/bot.py"],
-        cwd=str(BOT_DIR),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-    
-    PID_FILE.write_text(str(process.pid))
-    print(f"Bot started with PID {process.pid}")
+    try:
+        process = subprocess.Popen(
+            [str(VENV_PYTHON), "app/bot.py"],
+            cwd=str(BOT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        # Wait a bit to see if the process starts successfully
+        time.sleep(2)
+        if process.poll() is not None:
+            # Process has already terminated
+            stdout, stderr = process.communicate()
+            logger.error(f"Bot failed to start. Exit code: {process.returncode}")
+            logger.error(f"stdout: {stdout.decode()}")
+            logger.error(f"stderr: {stderr.decode()}")
+            return
+        
+        PID_FILE.write_text(str(process.pid))
+        logger.info(f"Bot started with PID {process.pid}")
+        
+    except Exception as e:
+        logger.error(f"Error starting bot: {e}")
+        cleanup_files()
 
 def stop_bot():
     if not PID_FILE.exists():
-        print("Bot not running or PID file not found")
+        logger.info("Bot not running or PID file not found")
+        cleanup_files()
         return
     
     try:
         pid = int(PID_FILE.read_text().strip())
         os.kill(pid, signal.SIGTERM)
-        PID_FILE.unlink()
-        print(f"Bot stopped (PID {pid})")
+        
+        # Wait for process to terminate
+        max_wait = 10
+        while max_wait > 0:
+            try:
+                os.kill(pid, 0)  # Check if process exists
+                time.sleep(1)
+                max_wait -= 1
+            except ProcessLookupError:
+                break
+        
+        if max_wait == 0:
+            logger.warning("Bot didn't stop gracefully, forcing termination")
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        
+        logger.info(f"Bot stopped (PID {pid})")
+        
     except ProcessLookupError:
-        print("Bot process not found")
-        PID_FILE.unlink()
+        logger.warning("Bot process not found")
     except Exception as e:
-        print(f"Error stopping bot: {e}")
+        logger.error(f"Error stopping bot: {e}")
+    finally:
+        cleanup_files()
 
 def restart_bot():
+    logger.info("Restarting bot...")
     stop_bot()
+    time.sleep(2)  # Wait for resources to be properly released
     start_bot()
 
 def main():

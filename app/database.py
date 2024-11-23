@@ -1,6 +1,6 @@
 import aiosqlite
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -78,3 +78,8 @@ class Database:
                 
         except Exception as e:
             logger.error(f"Error cleaning up old records: {e}")
+
+    def close(self):
+        """Close database connection (placeholder for cleanup)"""
+        logger.info("Database cleanup called")
+        pass  # aiosqlite handles connection cleanup automatically through context managers
