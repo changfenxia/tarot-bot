@@ -1,6 +1,7 @@
 [Unit]
 Description=Tarot Bot Telegram Service
 After=network.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -10,10 +11,24 @@ WorkingDirectory=/home/artlvr/tarot-bot
 Environment=PYTHONPATH=/home/artlvr/tarot-bot
 Environment=VIRTUAL_ENV=/home/artlvr/tarot-bot/venv
 Environment=PATH=/home/artlvr/tarot-bot/venv/bin:$PATH
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/home/artlvr/tarot-bot/.env
-ExecStart=/home/artlvr/tarot-bot/venv/bin/python3 manage.py start
+
+# Запуск с явным указанием интерпретатора и полными путями
+ExecStart=/home/artlvr/tarot-bot/venv/bin/python3 /home/artlvr/tarot-bot/manage.py start
+
+# Настройки перезапуска
 Restart=always
-RestartSec=10
+RestartSec=5
+StartLimitBurst=0
+
+# Настройки процесса
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillMode=mixed
+
+# Настройки для предотвращения зомби-процессов
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target

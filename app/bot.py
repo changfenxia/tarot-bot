@@ -484,105 +484,112 @@ class TarotBot:
     def __init__(self):
         self.application = None
         self.running = False
+        self.cleanup_lock = asyncio.Lock()
         
     async def initialize(self):
         """Initialize bot components."""
-        if self.application:
-            return
-
-        self.application = Application.builder().token(os.getenv('TELEGRAM_TOKEN')).build()
-        
-        # Initialize handlers
-        self.application.add_handler(CommandHandler("start", start))
-        self.application.add_handler(CommandHandler("stats", stats_command))
-        self.application.add_handler(CommandHandler("id", id_command))  
-        self.application.add_handler(CommandHandler("set_cooldown", set_cooldown_command))
-        self.application.add_handler(CommandHandler("switch_mode", switch_mode_command))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-    async def start(self):
-        """Start the bot."""
-        logger.info("Starting bot...")
-        
-        # Try to acquire lock
-        global bot_lock
-        bot_lock = BotLock(LOCK_FILE)
-        if not bot_lock.acquire():
-            logger.error("Another instance of the bot is already running")
-            return
-
         try:
-            await self.initialize()
+            # Initialize the bot
+            self.application = (
+                Application.builder()
+                .token(os.getenv('TELEGRAM_BOT_TOKEN'))
+                .build()
+            )
             
-            # Start the Bot
-            logger.info("Starting bot polling...")
+            # Add handlers
+            self.application.add_handler(CommandHandler("start", start))
+            self.application.add_handler(CommandHandler("stats", stats_command))
+            self.application.add_handler(CommandHandler("id", id_command))
+            self.application.add_handler(CommandHandler("setcooldown", set_cooldown_command))
+            self.application.add_handler(CommandHandler("switchmode", switch_mode_command))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            
+            # Initialize database
+            self.db = Database()
+            await self.db.init()
+            
+            # Set running flag
             self.running = True
             
-            # Create a new event loop for the polling
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
-                await self.application.initialize()
-                await self.application.start()
-                await self.application.updater.start_polling()
-                
-                # Keep the bot running
-                while self.running:
-                    await asyncio.sleep(1)
-                    
-            except Exception as e:
-                logger.error(f"Error during bot operation: {e}", exc_info=True)
-                self.running = False
-            finally:
-                await self.application.updater.stop()
-                await self.application.stop()
-                loop.stop()
-                loop.close()
-                
+            logger.info("Bot initialized successfully")
+            return True
         except Exception as e:
-            logger.error(f"Critical error: {e}", exc_info=True)
+            logger.error(f"Error initializing bot: {e}")
+            return False
+            
+    async def start(self):
+        """Start the bot."""
+        try:
+            # Initialize first
+            if not await self.initialize():
+                logger.error("Failed to initialize bot")
+                return
+                
+            logger.info("Starting bot...")
+            await self.application.initialize()
+            await self.application.start()
+            await self.application.run_polling()
+        except Exception as e:
+            logger.error(f"Error starting bot: {e}")
         finally:
             await self.stop()
             
     async def stop(self):
         """Stop the bot and cleanup resources."""
-        if self.running:
+        async with self.cleanup_lock:
+            if not self.running:
+                return
+                
             logger.info("Stopping bot...")
+            self.running = False
+            
             try:
-                self.running = False
                 if self.application:
-                    if self.application.updater and self.application.updater.running:
-                        await self.application.updater.stop()
                     await self.application.stop()
-                await cleanup()
-                logger.info("Bot stopped successfully")
+                    await self.application.shutdown()
             except Exception as e:
-                logger.error(f"Error during cleanup: {e}")
-            finally:
-                if bot_lock:
-                    bot_lock.release()
+                logger.error(f"Error stopping application: {e}")
+            
+            # Cleanup resources
+            await cleanup()
+            logger.info("Bot stopped")
 
-def run_bot():
-    """Run the bot with proper asyncio handling."""
-    bot = TarotBot()
-    
-    async def _run():
-        try:
-            await bot.start()
-        except KeyboardInterrupt:
-            logger.info("Bot stopped by user")
-        except Exception as e:
-            logger.error(f"Bot crashed: {e}", exc_info=True)
-        finally:
-            await bot.stop()
+# Global bot instance
+bot = None
+
+def signal_handler(signum, frame):
+    """Handle termination signals"""
+    logger.info(f"Received signal {signum}")
+    if bot and bot.running:
+        logger.info("Initiating graceful shutdown...")
+        asyncio.get_event_loop().create_task(bot.stop())
+
+async def run_bot():
+    """Run the bot with proper signal handling"""
+    global bot
     
     try:
-        asyncio.run(_run())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by keyboard interrupt")
+        # Set up signal handlers
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, signal_handler)
+        
+        # Create and start bot
+        bot = TarotBot()
+        await bot.start()
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error(f"Error in run_bot: {e}")
+    finally:
+        if bot:
+            await bot.stop()
 
 if __name__ == '__main__':
-    run_bot()
+    # Set up asyncio event loop with proper signal handling
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        loop.run_until_complete(run_bot())
+    except Exception as e:
+        logger.error(f"Error in main: {e}")
+    finally:
+        loop.close()
