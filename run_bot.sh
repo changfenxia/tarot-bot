@@ -12,4 +12,4 @@ source .env
 set +a
 
 # Run the bot with start command
-./venv/bin/python manage.py start
+python3 manage.py start
