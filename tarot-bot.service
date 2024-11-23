@@ -1,0 +1,17 @@
+[Unit]
+Description=Tarot Bot Telegram Service
+After=network.target
+
+[Service]
+Type=simple
+User=artlvr
+Group=artlvr
+WorkingDirectory=/home/artlvr/tarot-bot
+Environment=PYTHONPATH=/home/artlvr/tarot-bot
+EnvironmentFile=/home/artlvr/tarot-bot/.env
+ExecStart=/home/artlvr/tarot-bot/venv/bin/python -m app.bot
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
