@@ -6,7 +6,11 @@ from dotenv import load_dotenv
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(Path(__file__).parent.parent / 'bot.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -28,12 +32,12 @@ import fcntl
 from constants import TAROT_CARDS, ADMIN_USER_IDS
 from database import Database
 from messages import (
-    WELCOME_MESSAGE, COOLDOWN_MESSAGE, READING_START,
+    WELCOME_MESSAGE, READING_START,
     SECOND_CARD_INTRO, THIRD_CARD_INTRO,
     PAST_CARD, PRESENT_CARD, FUTURE_CARD,
     INTERPRETATION_START, CARDS_SILENT,
     MYSTICAL_POWERS_UNAVAILABLE, ORACLE_MEDITATION,
-    CLOSING_MESSAGE, ERROR_MESSAGE
+    CLOSING_MESSAGE, ERROR_MESSAGE, get_cooldown_message
 )
 
 # Configure paths
@@ -202,6 +206,81 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
+async def set_cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set cooldown duration in minutes (admin only)"""
+    user_id = update.effective_user.id
+    logger.info(f"Set cooldown command from user {user_id}")
+
+    if user_id not in ADMIN_USER_IDS:
+        logger.warning(f"Unauthorized access attempt to set_cooldown by user {user_id}")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⛔️ У вас нет прав для использования этой команды."
+        )
+        return
+
+    try:
+        # Check if minutes parameter is provided
+        if not context.args or not context.args[0].isdigit():
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Пожалуйста, укажите время ожидания в минутах.\n"
+                     "Пример: /set_cooldown 1440"
+            )
+            return
+
+        minutes = int(context.args[0])
+        if minutes < 1:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Время ожидания должно быть не менее 1 минуты."
+            )
+            return
+
+        # Update cooldown in database
+        if await db.set_cooldown_minutes(minutes, user_id):
+            human_readable = (
+                f"{minutes} минут" if minutes >= 5 
+                else f"{minutes} минуты" if 2 <= minutes <= 4 
+                else "минуту"
+            )
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ Время ожидания между предсказаниями установлено: {human_readable}."
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Не удалось обновить время ожидания. Попробуйте позже."
+            )
+
+    except Exception as e:
+        logger.error(f"Error in set_cooldown command: {e}")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Произошла ошибка при обновлении времени ожидания."
+        )
+
+async def switch_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle between test and normal mode."""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_USER_IDS:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=MYSTICAL_POWERS_UNAVAILABLE
+        )
+        return
+
+    new_mode = await db.toggle_test_mode()
+    mode_str = "тестовый" if new_mode else "обычный"
+    
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f"✨ Режим работы изменен на: {mode_str}"
+    )
+    logger.info(f"Bot mode changed to: {mode_str} by admin {user_id}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and perform tarot reading."""
     user_id = update.effective_user.id
@@ -212,11 +291,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Check cooldown
         logger.info(f"Checking cooldown for user {user_id}")
-        if await db.is_on_cooldown(user_id, cooldown_seconds=86400):  # 24 hours = 86400 seconds
-            logger.info(f"User {user_id} is on cooldown")
+        is_cooldown, remaining_minutes = await db.is_on_cooldown(user_id)
+        if is_cooldown:
+            logger.info(f"User {user_id} is on cooldown, {remaining_minutes} minutes remaining")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=COOLDOWN_MESSAGE
+                text=get_cooldown_message(remaining_minutes)
             )
             return
 
@@ -277,12 +357,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=INTERPRETATION_START
                 )
                 await asyncio.sleep(3)
-                response = await yandex_gpt.generate_interpretation(cards, question)
                 
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=response if response else CARDS_SILENT
-                )
+                # Check test mode only for admin users
+                is_test = await db.is_test_mode() and user_id in ADMIN_USER_IDS
+                
+                if is_test:
+                    logger.info(f"Test mode active for admin {user_id}, skipping YandexGPT request")
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="🔮 Тестовый режим активен. Интерпретация карт отключена."
+                    )
+                else:
+                    response = await yandex_gpt.generate_interpretation(cards, question)
+                    
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=response if response else CARDS_SILENT
+                    )
             except Exception as e:
                 logger.error(f"Error handling message: {e}")
                 await context.bot.send_message(
@@ -352,6 +443,8 @@ class TarotBot:
         self.application.add_handler(CommandHandler("start", start))
         self.application.add_handler(CommandHandler("stats", stats_command))
         self.application.add_handler(CommandHandler("id", id_command))  
+        self.application.add_handler(CommandHandler("set_cooldown", set_cooldown_command))
+        self.application.add_handler(CommandHandler("switch_mode", switch_mode_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
     async def start(self):
