@@ -8,26 +8,28 @@ Type=simple
 User=artlvr
 Group=artlvr
 WorkingDirectory=/home/artlvr/tarot-bot
+
+# Environment setup
 Environment=PYTHONPATH=/home/artlvr/tarot-bot
 Environment=VIRTUAL_ENV=/home/artlvr/tarot-bot/venv
 Environment=PATH=/home/artlvr/tarot-bot/venv/bin:$PATH
 Environment=PYTHONUNBUFFERED=1
+
+# Load environment variables from file
 EnvironmentFile=/home/artlvr/tarot-bot/.env
 
-# Запуск с явным указанием интерпретатора и полными путями
+# Start command
 ExecStart=/home/artlvr/tarot-bot/venv/bin/python3 /home/artlvr/tarot-bot/manage.py start
 
-# Настройки перезапуска
+# Restart configuration
 Restart=always
 RestartSec=5
 StartLimitBurst=0
 
-# Настройки процесса
+# Process management
 TimeoutStartSec=30
 TimeoutStopSec=30
 KillMode=mixed
-
-# Настройки для предотвращения зомби-процессов
 KillSignal=SIGTERM
 
 [Install]
