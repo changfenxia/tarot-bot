@@ -23,6 +23,7 @@ import asyncio
 from datetime import datetime, timedelta
 import random
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yandex_gpt import YandexGPTClient
 import json
@@ -37,12 +38,19 @@ from messages import (
     PAST_CARD, PRESENT_CARD, FUTURE_CARD,
     INTERPRETATION_START, CARDS_SILENT,
     MYSTICAL_POWERS_UNAVAILABLE, ORACLE_MEDITATION,
-    CLOSING_MESSAGE, ERROR_MESSAGE, get_cooldown_message
+    CLOSING_MESSAGE, ERROR_MESSAGE, get_cooldown_message,
+    escape_html
 )
 
 # Configure paths
 BASE_DIR = Path(__file__).resolve().parent.parent
-CARDS_DIR = Path(__file__).resolve().parent / "static" / "cards"
+CARDS_DIR = (Path(__file__).resolve().parent / "static" / "cards").resolve()
+logger.info(f"Initialized CARDS_DIR as: {CARDS_DIR}")
+logger.info(f"CARDS_DIR exists: {CARDS_DIR.exists()}")
+if CARDS_DIR.exists():
+    logger.info(f"Found card images: {list(CARDS_DIR.glob('*.jpg'))}")
+else:
+    logger.error(f"CARDS_DIR does not exist: {CARDS_DIR}")
 LOCK_FILE = BASE_DIR / "bot.lock"
 DB_PATH = BASE_DIR / "data" / "tarot.db"
 
@@ -86,57 +94,61 @@ class BotLock:
                 logging.error(f"Error releasing lock: {e}")
 
 async def send_card_image(update: Update, context: ContextTypes.DEFAULT_TYPE, card_name: str, position: str):
-    """Send a card image with its position."""
+    """Send a card image followed by its description."""
     try:
         # Get the correct image filename from TAROT_CARDS dictionary
         if card_name not in TAROT_CARDS:
             logger.error(f"Card name not found in TAROT_CARDS: {card_name}")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"{position}\n(Invalid card name)"
+                text=f"{position}\n(Invalid card name)",
+                parse_mode=ParseMode.HTML
             )
             return
             
         image_filename = TAROT_CARDS[card_name]
+        logger.info(f"Looking for image file: {image_filename}")
         
-        # Try different possible paths
-        possible_paths = [
-            CARDS_DIR / image_filename,  # Absolute path
-            Path(__file__).resolve().parent / "static" / "cards" / image_filename,  # Relative to bot.py
-            Path("app/static/cards") / image_filename  # Project root relative
-        ]
+        image_path = CARDS_DIR / image_filename
+        logger.info(f"Full image path: {image_path}")
         
-        image_path = None
-        for path in possible_paths:
-            if path.exists():
-                image_path = path
-                break
-                
-        if not image_path:
-            logger.error(f"Card image file not found: {image_filename}. Tried paths: {possible_paths}")
+        if not image_path.exists():
+            logger.error(f"Card image file not found: {image_path}")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"{position}\n(Image file not found)"
+                text=f"{position}\n(Image file not found)",
+                parse_mode=ParseMode.HTML
             )
             return
 
         logger.info(f"Sending card image from path: {image_path}")
+        # First send just the image
         with open(image_path, 'rb') as image_file:
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
-                photo=image_file,
-                caption=position
+                photo=image_file
             )
+        
+        # Then send the description
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=position,
+            parse_mode=ParseMode.HTML
+        )
     except Exception as e:
         logger.error(f"Error sending card image: {e}")
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"{position}\n(Error: {str(e)})"
+            text=f"{position}\n(Error: {str(e)})",
+            parse_mode=ParseMode.HTML
         )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
-    await update.message.reply_text(WELCOME_MESSAGE)
+    await update.message.reply_text(
+        WELCOME_MESSAGE,
+        parse_mode=ParseMode.HTML
+    )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command - show bot statistics (admin only)"""
@@ -147,12 +159,18 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not ADMIN_USER_IDS:
             logger.warning("Admin IDs list is empty!")
-            await update.message.reply_text("⚠️ Список администраторов пуст. Обратитесь к разработчику бота.")
+            await update.message.reply_text(
+                "Список администраторов пуст. Обратитесь к разработчику бота.",
+                parse_mode=ParseMode.HTML
+            )
             return
             
         if user_id not in ADMIN_USER_IDS:
             logger.warning(f"Access denied for user {user_id} - not in admin list {ADMIN_USER_IDS}")
-            await update.message.reply_text("⛔️ Эта команда доступна только администраторам бота.")
+            await update.message.reply_text(
+                "Эта команда доступна только администраторам бота.",
+                parse_mode=ParseMode.HTML
+            )
             return
         
         logger.info(f"Access granted for admin {user_id}")
@@ -164,47 +182,59 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         stats = await db.get_user_stats(days)
         if not stats:
-            await update.message.reply_text("❌ Не удалось получить статистику.")
+            await update.message.reply_text(
+                "Не удалось получить статистику.",
+                parse_mode=ParseMode.HTML
+            )
             return
         
         # Format statistics message
-        message = f"📊 *Статистика бота за {stats['period_days']} дней:*\n\n"
-        message += f"📝 Всего запросов: {stats['total_requests']}\n"
-        message += f"👥 Уникальных пользователей: {stats['unique_users']}\n"
-        message += f"✅ Успешных запросов: {stats['successful_requests']}\n"
-        message += f"❌ Неудачных запросов: {stats['failed_requests']}\n\n"
+        message = f"Статистика бота за {stats['period_days']} дней:\n\n"
+        message += f"Всего запросов: {stats['total_requests']}\n"
+        message += f"Уникальных пользователей: {stats['unique_users']}\n"
+        message += f"Успешных запросов: {stats['successful_requests']}\n"
+        message += f"Неудачных запросов: {stats['failed_requests']}\n\n"
         
         if stats['top_users']:
-            message += "*👑 Самые активные пользователи:*\n"
+            message += "*Самые активные пользователи:*\n"
             for username, count in stats['top_users']:
                 message += f"- {username}: {count} запросов\n"
             message += "\n"
         
         if stats['top_questions']:
-            message += "*❓ Популярные вопросы:*\n"
+            message += "*Популярные вопросы:*\n"
             for question, count in stats['top_questions']:
                 # Truncate long questions
                 short_q = question[:50] + "..." if len(question) > 50 else question
                 message += f"- {short_q} ({count} раз)\n"
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.HTML
+        )
 
     except Exception as e:
         logger.error(f"Error during stats command: {e}")
-        await update.message.reply_text("❌ Ошибка при получении статистики.")
+        await update.message.reply_text(
+            "Ошибка при получении статистики.",
+            parse_mode=ParseMode.HTML
+        )
 
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user their Telegram ID"""
     user = update.effective_user
-    message = f"🆔 *Ваша информация:*\n"
+    message = f"*Ваша информация:*\n"
     message += f"• ID: `{user.id}`\n"
     message += f"• Имя пользователя: {user.username or 'не указано'}\n"
     message += f"• Полное имя: {user.full_name}\n\n"
     
     if user.id in ADMIN_USER_IDS:
-        message += "👑 Вы являетесь администратором бота"
+        message += "Вы являетесь администратором бота"
     
-    await update.message.reply_text(message, parse_mode='Markdown')
+    await update.message.reply_text(
+        message,
+        parse_mode=ParseMode.HTML
+    )
 
 async def set_cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set cooldown duration in minutes (admin only)"""
@@ -215,7 +245,8 @@ async def set_cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.warning(f"Unauthorized access attempt to set_cooldown by user {user_id}")
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="⛔️ У вас нет прав для использования этой команды."
+            text="У вас нет прав для использования этой команды.",
+            parse_mode=ParseMode.HTML
         )
         return
 
@@ -224,8 +255,9 @@ async def set_cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYP
         if not context.args or not context.args[0].isdigit():
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="❌ Пожалуйста, укажите время ожидания в минутах.\n"
-                     "Пример: /set_cooldown 1440"
+                text="Пожалуйста, укажите время ожидания в минутах.\n"
+                     "Пример: /set_cooldown 1440",
+                parse_mode=ParseMode.HTML
             )
             return
 
@@ -233,7 +265,8 @@ async def set_cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYP
         if minutes < 1:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="❌ Время ожидания должно быть не менее 1 минуты."
+                text="Время ожидания должно быть не менее 1 минуты.",
+                parse_mode=ParseMode.HTML
             )
             return
 
@@ -246,19 +279,22 @@ async def set_cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"✅ Время ожидания между предсказаниями установлено: {human_readable}."
+                text=f"Время ожидания между предсказаниями установлено: {human_readable}.",
+                parse_mode=ParseMode.HTML
             )
         else:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="❌ Не удалось обновить время ожидания. Попробуйте позже."
+                text="Не удалось обновить время ожидания. Попробуйте позже.",
+                parse_mode=ParseMode.HTML
             )
 
     except Exception as e:
         logger.error(f"Error in set_cooldown command: {e}")
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Произошла ошибка при обновлении времени ожидания."
+            text="Произошла ошибка при обновлении времени ожидания.",
+            parse_mode=ParseMode.HTML
         )
 
 async def switch_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -268,7 +304,8 @@ async def switch_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_id not in ADMIN_USER_IDS:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=MYSTICAL_POWERS_UNAVAILABLE
+            text=MYSTICAL_POWERS_UNAVAILABLE,
+            parse_mode=ParseMode.HTML
         )
         return
 
@@ -277,9 +314,16 @@ async def switch_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text=f"✨ Режим работы изменен на: {mode_str}"
+        text=f"Режим работы изменен на: {mode_str}",
+        parse_mode=ParseMode.HTML
     )
     logger.info(f"Bot mode changed to: {mode_str} by admin {user_id}")
+
+def convert_markdown_to_html(text):
+    """Convert markdown bold syntax to HTML bold tags."""
+    import re
+    # Replace markdown bold (**text**) with HTML bold (<b>text</b>)
+    return re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and perform tarot reading."""
@@ -296,7 +340,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"User {user_id} is on cooldown, {remaining_minutes} minutes remaining")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=get_cooldown_message(remaining_minutes)
+                text=get_cooldown_message(remaining_minutes),
+                parse_mode=ParseMode.HTML
             )
             return
 
@@ -304,57 +349,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Updating last request time for user {user_id}")
         await db.update_last_request(user_id)
 
-        # Generate three random cards
-        cards = random.sample(list(TAROT_CARDS.keys()), 3)
-        logger.info(f"Generated cards for user {user_id}: {cards}")
+        # Draw cards
+        try:
+            logger.info(f"Drawing cards from TAROT_CARDS. Type: {type(TAROT_CARDS)}, Length: {len(TAROT_CARDS)}")
+            cards = random.sample(list(TAROT_CARDS.keys()), 3)
+            logger.info(f"Successfully drew cards: {cards}")
+        except Exception as e:
+            logger.error(f"Error drawing cards: {e}, TAROT_CARDS type: {type(TAROT_CARDS)}")
+            raise
         
-        # Log the request
-        await db.log_request(
-            user_id=user_id,
-            username=update.effective_user.username,
-            question=question,
-            cards=cards,
-            success=True
-        )
-
-        # Initial message
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=READING_START
-        )
-
-        # Send first card
-        await send_card_image(update, context, cards[0], PAST_CARD.format(cards[0]))
-        
-        # Message before second card
-        await asyncio.sleep(3)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=SECOND_CARD_INTRO
-        )
-
-        # Send second card
-        await asyncio.sleep(3)
-        await send_card_image(update, context, cards[1], PRESENT_CARD.format(cards[1]))
-
-        # Message before third card
-        await asyncio.sleep(3)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=THIRD_CARD_INTRO
-        )
-
-        # Send third card
-        await asyncio.sleep(3)
-        await send_card_image(update, context, cards[2], FUTURE_CARD.format(cards[2]))
-
-        # Generate interpretation using YandexGPT
-        if yandex_gpt:
+        try:
+            # Send initial message
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=READING_START,
+                parse_mode=ParseMode.HTML
+            )
+            await asyncio.sleep(2)
+            
+            # Send first card
+            first_card_text = PAST_CARD.format(escape_html(cards[0]))
+            await send_card_image(update, context, cards[0], first_card_text)
+            await asyncio.sleep(2)
+            
+            # Send second card
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=SECOND_CARD_INTRO,
+                parse_mode=ParseMode.HTML
+            )
+            await asyncio.sleep(1)
+            second_card_text = PRESENT_CARD.format(escape_html(cards[1]))
+            await send_card_image(update, context, cards[1], second_card_text)
+            await asyncio.sleep(2)
+            
+            # Send third card
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=THIRD_CARD_INTRO,
+                parse_mode=ParseMode.HTML
+            )
+            await asyncio.sleep(1)
+            third_card_text = FUTURE_CARD.format(escape_html(cards[2]))
+            await send_card_image(update, context, cards[2], third_card_text)
+            await asyncio.sleep(2)
+            
             try:
-                logger.info(f"Generating interpretation for user {user_id}")
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text=INTERPRETATION_START
+                    text=INTERPRETATION_START,
+                    parse_mode=ParseMode.HTML
                 )
                 await asyncio.sleep(3)
                 
@@ -365,32 +409,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Test mode active for admin {user_id}, skipping YandexGPT request")
                     await context.bot.send_message(
                         chat_id=update.effective_chat.id,
-                        text="🔮 Тестовый режим активен. Интерпретация карт отключена."
+                        text="Тестовый режим активен. Интерпретация карт отключена.",
+                        parse_mode=ParseMode.HTML
                     )
                 else:
                     response = await yandex_gpt.generate_interpretation(cards, question)
-                    
+                    # Escape special characters in the response
+                    interpretation = convert_markdown_to_html(escape_html(response if response else CARDS_SILENT))
                     await context.bot.send_message(
                         chat_id=update.effective_chat.id,
-                        text=response if response else CARDS_SILENT
+                        text=interpretation,
+                        parse_mode=ParseMode.HTML
                     )
             except Exception as e:
                 logger.error(f"Error handling message: {e}")
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text=MYSTICAL_POWERS_UNAVAILABLE
+                    text=MYSTICAL_POWERS_UNAVAILABLE,
+                    parse_mode=ParseMode.HTML
                 )
-        else:
+        except Exception as e:
+            logger.error(f"Error handling message: {e}")
+            # Log failed request
+            await db.log_request(
+                user_id=user_id,
+                username=update.effective_user.username,
+                question=question,
+                cards=[],
+                success=False
+            )
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=ORACLE_MEDITATION
+                text=ERROR_MESSAGE,
+                parse_mode=ParseMode.HTML
             )
-
-        # Send closing message
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=CLOSING_MESSAGE
-        )
 
     except Exception as e:
         logger.error(f"Error handling message: {e}")
@@ -404,7 +456,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=ERROR_MESSAGE
+            text=ERROR_MESSAGE,
+            parse_mode=ParseMode.HTML
         )
 
 async def cleanup():
