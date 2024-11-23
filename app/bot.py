@@ -6,7 +6,6 @@ import random
 from dotenv import load_dotenv
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import redis
 from jinja2 import Environment, FileSystemLoader
 from yandex_gpt import YandexGPTClient
 import json
@@ -15,6 +14,7 @@ import signal
 import atexit
 import fcntl
 from constants import TAROT_CARDS
+from database import Database
 
 # Load environment variables
 load_dotenv()
@@ -30,13 +30,10 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 CARDS_DIR = Path(__file__).resolve().parent / "static" / "cards"
 LOCK_FILE = BASE_DIR / "bot.lock"
+DB_PATH = BASE_DIR / "data" / "tarot.db"
 
-# Initialize Redis client
-redis_client = redis.Redis(
-    host=os.getenv('REDIS_HOST', 'localhost'),
-    port=int(os.getenv('REDIS_PORT', 6379)),
-    db=int(os.getenv('REDIS_DB', 0))
-)
+# Initialize Database
+db = Database(str(DB_PATH))
 
 # Initialize YandexGPT client
 try:
@@ -77,40 +74,6 @@ class BotLock:
             except (IOError, OSError) as e:
                 logging.error(f"Error releasing lock: {e}")
 
-async def check_cooldown(user_id: int) -> bool:
-    """Check if user can make a new request"""
-    last_request = redis_client.get(f"user:{user_id}:last_request")
-    if last_request:
-        last_request_time = datetime.fromtimestamp(float(last_request))
-        if datetime.now() - last_request_time < timedelta(seconds=30):
-            return False
-    return True
-
-async def set_cooldown(user_id: int):
-    """Set cooldown for user"""
-    redis_client.set(f"user:{user_id}:last_request", datetime.now().timestamp())
-
-async def is_on_cooldown(user_id: int) -> bool:
-    """Check if user is on cooldown"""
-    last_request = redis_client.get(f"user:{user_id}:last_request")
-    if last_request:
-        last_request_time = datetime.fromtimestamp(float(last_request))
-        if datetime.now() - last_request_time < timedelta(seconds=30):
-            return True
-    return False
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /start is issued."""
-    welcome_message = (
-        "🔮 Приветствую тебя в мире Таро! 🌟\n\n"
-        "Я - мистический проводник в мир карт Таро. "
-        "Просто напиши свой вопрос, и я проведу для тебя расклад.\n\n"
-        "✨ Помни: карты Таро говорят с нами через символы и знаки. "
-        "Будь открыт к их посланиям..."
-    )
-    
-    await update.message.reply_text(welcome_message)
-
 async def send_card_image(update: Update, context: ContextTypes.DEFAULT_TYPE, card_name: str, position: str):
     """Send a card image with its position."""
     try:
@@ -119,20 +82,32 @@ async def send_card_image(update: Update, context: ContextTypes.DEFAULT_TYPE, ca
             logger.warning(f"Image not found for card: {card_name}")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"🌟 {position}: {card_name} 🌟"
+                text=f" {position}: {card_name} "
             )
         else:
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=image_path.open('rb'),
-                caption=f"🌟 {position}: {card_name} 🌟"
+                caption=f" {position}: {card_name} "
             )
     except Exception as e:
         logger.error(f"Error sending card image: {e}")
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"🌟 {position}: {card_name} 🌟"
+            text=f" {position}: {card_name} "
         )
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /start is issued."""
+    welcome_message = (
+        " Приветствую тебя в мире Таро! \n\n"
+        "Я - мистический проводник в мир карт Таро. "
+        "Просто напиши свой вопрос, и я проведу для тебя расклад.\n\n"
+        " : карты Таро говорят с нами через символы и знаки. "
+        "Будь открыт к их посланиям..."
+    )
+    
+    await update.message.reply_text(welcome_message)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and perform tarot reading."""
@@ -141,12 +116,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Check cooldown
-        if await is_on_cooldown(user_id):
+        if await db.is_on_cooldown(user_id):
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="✨ Для следующего предсказания пока недостаточно магической энергии... Вернись позже 🌙"
+                text=" Для следующего предсказания пока недостаточно магической энергии... Вернись позже "
             )
             return
+
+        # Update last request time
+        await db.update_last_request(user_id)
 
         # Generate three random cards
         cards = random.sample(list(TAROT_CARDS.keys()), 3)
@@ -156,33 +134,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Initial message
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="🔮 Я начинаю раскладывать карты... Древняя магия Таро откроет нам свои тайны..."
+            text=" Я начинаю раскладывать карты... Древняя магия Таро откроет нам свои тайны..."
         )
 
         # Send first card
-        await send_card_image(update, context, cards[0], "Прошлое 🕰")
+        await send_card_image(update, context, cards[0], "Прошлое ")
         
         # Message before second card
         await asyncio.sleep(3)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="✨ Туман времени рассеивается... Я вижу следующую карту..."
+            text=" Туман времени рассеивается... Я вижу следующую карту..."
         )
 
         # Send second card
         await asyncio.sleep(3)
-        await send_card_image(update, context, cards[1], "Настоящее ⚡️")
+        await send_card_image(update, context, cards[1], "Настоящее ")
 
         # Message before third card
         await asyncio.sleep(3)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="🌟 Последняя карта готова раскрыть свой секрет..."
+            text=" Последняя карта готова раскрыть свой секрет..."
         )
 
         # Send third card
         await asyncio.sleep(3)
-        await send_card_image(update, context, cards[2], "Будущее 🔮")
+        await send_card_image(update, context, cards[2], "Будущее ")
 
         # Generate interpretation using YandexGPT
         if yandex_gpt:
@@ -191,42 +169,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Добавляем мистическое сообщение перед толкованием
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text="🌟 Сейчас я погружаюсь в мистический транс... Карты шепчут свои тайны, и я готовлю для вас глубокое толкование... ✨"
+                    text=" Сейчас я погружаюсь в мистический транс... Карты шепчут свои тайны, и я готовлю для вас глубокое толкование... "
                 )
                 await asyncio.sleep(3)
                 response = await yandex_gpt.generate_interpretation(cards, question)
                 
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text=response if response else "🔮 Карты хранят молчание..."
+                    text=response if response else " Карты хранят молчание..."
                 )
             except Exception as e:
                 logger.error(f"Error handling message: {e}")
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text="🌌 Мистические силы временно недоступны... 🌌"
+                    text=" Мистические силы временно недоступны... "
                 )
         else:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="🌌 Оракул погрузился в глубокую медитацию... 🌌"
+                text=" Оракул погрузился в глубокую медитацию... "
             )
 
         # Send closing message
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="🌙 Теперь картам нужен отдых... ✨ Ты можешь вернуться завтра за новым предсказанием 🔮"
+            text=" Теперь картам нужен отдых... Ты можешь вернуться завтра за новым предсказанием "
         )
-
-        # Set cooldown
-        await set_cooldown(user_id)
 
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.error(f"Error handling message: {e}")
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="🌑 Силы Таро временно недоступны... Попробуйте немного позже 🌑"
+            text=" Силы Таро временно недоступны... Попробуйте немного позже "
         )
 
 async def cleanup():
@@ -234,8 +209,8 @@ async def cleanup():
     logger = logging.getLogger(__name__)
     logger.info("Cleaning up before shutdown...")
     try:
-        # Close Redis connection
-        redis_client.close()
+        # Close Database connection
+        db.close()
         # Release lock
         bot_lock.release()
     except Exception as e:
