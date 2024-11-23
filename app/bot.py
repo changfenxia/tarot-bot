@@ -19,6 +19,10 @@ env_path = Path(__file__).parent.parent / '.env'
 logger.info(f"Loading environment variables from: {env_path}")
 load_dotenv(env_path)
 
+# Log environment variables (без значений, только имена)
+logger.info("Environment variables loaded. Available variables: %s", 
+            ', '.join([k for k in os.environ.keys() if k.startswith('TELEGRAM_') or k.startswith('YANDEX_')]))
+
 import asyncio
 from datetime import datetime, timedelta
 import random
@@ -489,14 +493,23 @@ class TarotBot:
     async def initialize(self):
         """Initialize bot components."""
         try:
+            # Log token availability
+            token = os.getenv('TELEGRAM_TOKEN')
+            if not token:
+                logger.error("TELEGRAM_TOKEN environment variable is not set!")
+                return False
+            logger.info("TELEGRAM_TOKEN is available")
+            
             # Initialize the bot
+            logger.info("Initializing bot application...")
             self.application = (
                 Application.builder()
-                .token(os.getenv('TELEGRAM_TOKEN'))  # Возвращаем оригинальное имя переменной
+                .token(token)
                 .build()
             )
             
             # Add handlers
+            logger.info("Adding command handlers...")
             self.application.add_handler(CommandHandler("start", start))
             self.application.add_handler(CommandHandler("stats", stats_command))
             self.application.add_handler(CommandHandler("id", id_command))
@@ -505,6 +518,7 @@ class TarotBot:
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
             
             # Initialize database
+            logger.info("Initializing database...")
             self.db = Database()
             await self.db.init()
             
@@ -514,7 +528,7 @@ class TarotBot:
             logger.info("Bot initialized successfully")
             return True
         except Exception as e:
-            logger.error(f"Error initializing bot: {e}")
+            logger.error(f"Error initializing bot: {e}", exc_info=True)
             return False
             
     async def start(self):
