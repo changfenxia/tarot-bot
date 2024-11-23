@@ -22,12 +22,28 @@ class Database:
         """Initialize database tables"""
         try:
             async with aiosqlite.connect(self.db_path) as db:
+                # Create bot_settings table with additional columns
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS bot_settings (
                         key TEXT PRIMARY KEY,
-                        value TEXT NOT NULL
+                        value TEXT NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_by INTEGER
                     )
                 ''')
+                
+                # Add missing columns to bot_settings if they don't exist
+                try:
+                    await db.execute('ALTER TABLE bot_settings ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+                except Exception as e:
+                    if 'duplicate column name' not in str(e).lower():
+                        logger.error(f"Error adding updated_at column: {e}")
+                
+                try:
+                    await db.execute('ALTER TABLE bot_settings ADD COLUMN updated_by INTEGER')
+                except Exception as e:
+                    if 'duplicate column name' not in str(e).lower():
+                        logger.error(f"Error adding updated_by column: {e}")
                 
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS user_cooldowns (
