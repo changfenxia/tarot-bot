@@ -492,7 +492,7 @@ class TarotBot:
             # Initialize the bot
             self.application = (
                 Application.builder()
-                .token(os.getenv('TELEGRAM_BOT_TOKEN'))
+                .token(os.getenv('TELEGRAM_TOKEN'))  # Возвращаем оригинальное имя переменной
                 .build()
             )
             
