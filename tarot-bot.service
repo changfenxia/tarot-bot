@@ -11,7 +11,7 @@ Environment=PYTHONPATH=/home/artlvr/tarot-bot
 Environment=VIRTUAL_ENV=/home/artlvr/tarot-bot/venv
 Environment=PATH=/home/artlvr/tarot-bot/venv/bin:$PATH
 EnvironmentFile=/home/artlvr/tarot-bot/.env
-ExecStart=/home/artlvr/tarot-bot/venv/bin/python3 -m app.bot
+ExecStart=/home/artlvr/tarot-bot/venv/bin/python3 manage.py start
 Restart=always
 RestartSec=10
 
