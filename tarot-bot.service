@@ -8,8 +8,10 @@ User=artlvr
 Group=artlvr
 WorkingDirectory=/home/artlvr/tarot-bot
 Environment=PYTHONPATH=/home/artlvr/tarot-bot
+Environment=VIRTUAL_ENV=/home/artlvr/tarot-bot/venv
+Environment=PATH=/home/artlvr/tarot-bot/venv/bin:$PATH
 EnvironmentFile=/home/artlvr/tarot-bot/.env
-ExecStart=/home/artlvr/tarot-bot/venv/bin/python -m app.bot
+ExecStart=/home/artlvr/tarot-bot/venv/bin/python3 -m app.bot
 Restart=always
 RestartSec=10
 
