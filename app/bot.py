@@ -320,16 +320,17 @@ async def switch_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and perform tarot reading."""
     user_id = update.effective_user.id
+    username = update.effective_user.username or "No username"
     question = update.message.text
     
-    logger.info(f"Received message from user {user_id}: {question}")
+    logger.info(f"Received message from user {user_id} (@{username}): {question}")
 
     try:
         # Check cooldown
-        logger.info(f"Checking cooldown for user {user_id}")
+        logger.info(f"Checking cooldown for user {user_id} (@{username})")
         is_cooldown, remaining_minutes = await db.is_on_cooldown(user_id)
         if is_cooldown:
-            logger.info(f"User {user_id} is on cooldown, {remaining_minutes} minutes remaining")
+            logger.info(f"User {user_id} (@{username}) is on cooldown, {remaining_minutes} minutes remaining")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=get_cooldown_message(remaining_minutes),
@@ -338,16 +339,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Update last request time
-        logger.info(f"Updating last request time for user {user_id}")
+        logger.info(f"Updating last request time for user {user_id} (@{username})")
         await db.update_last_request(user_id)
 
         # Draw cards
         try:
-            logger.info(f"Drawing cards from TAROT_CARDS. Type: {type(TAROT_CARDS)}, Length: {len(TAROT_CARDS)}")
+            logger.info(f"Drawing cards from TAROT_CARDS for user {user_id} (@{username})")
             cards = random.sample(list(TAROT_CARDS.keys()), 3)
-            logger.info(f"Successfully drew cards: {cards}")
+            logger.info(f"Successfully drew cards for user {user_id} (@{username}): {cards}")
         except Exception as e:
-            logger.error(f"Error drawing cards: {e}, TAROT_CARDS type: {type(TAROT_CARDS)}")
+            logger.error(f"Error drawing cards for user {user_id} (@{username}): {e}")
             raise
         
         try:
@@ -398,7 +399,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_test = await db.is_test_mode() and user_id in ADMIN_USER_IDS
                 
                 if is_test:
-                    logger.info(f"Test mode active for admin {user_id}, skipping YandexGPT request")
+                    logger.info(f"Test mode active for admin {user_id} (@{username}), skipping YandexGPT request")
                     await context.bot.send_message(
                         chat_id=update.effective_chat.id,
                         text="Тестовый режим активен. Интерпретация карт отключена.",
@@ -409,12 +410,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Log successful request
                     await db.log_request(
                         user_id=user_id,
-                        username=update.effective_user.username,
+                        username=username,
                         question=question,
                         cards=cards,
                         success=True
                     )
-                    logger.info(f"Successful request from user {user_id} with question: {question}")
+                    logger.info(f"Successful request from user {user_id} (@{username}) with question: {question}")
                     # Escape special characters in the response
                     interpretation = convert_markdown_to_html(escape_html(response if response else CARDS_SILENT))
                     await context.bot.send_message(
@@ -423,18 +424,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode=ParseMode.HTML
                     )
             except Exception as e:
-                logger.error(f"Error handling message: {e}")
+                logger.error(f"Error handling message for user {user_id} (@{username}): {e}")
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
                     text=MYSTICAL_POWERS_UNAVAILABLE,
                     parse_mode=ParseMode.HTML
                 )
         except Exception as e:
-            logger.error(f"Error handling message: {e}")
+            logger.error(f"Error handling message for user {user_id} (@{username}): {e}")
             # Log failed request
             await db.log_request(
                 user_id=user_id,
-                username=update.effective_user.username,
+                username=username,
                 question=question,
                 cards=[],
                 success=False
@@ -446,11 +447,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     except Exception as e:
-        logger.error(f"Error handling message: {e}")
+        logger.error(f"Error handling message for user {user_id} (@{username}): {e}")
         # Log failed request
         await db.log_request(
             user_id=user_id,
-            username=update.effective_user.username,
+            username=username,
             question=question,
             cards=[],
             success=False
