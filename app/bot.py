@@ -1,5 +1,9 @@
 import os
 import logging
+import random
+import asyncio
+import aiosqlite
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -19,9 +23,6 @@ env_path = Path(__file__).parent.parent / '.env'
 logger.info(f"Loading environment variables from: {env_path}")
 load_dotenv(env_path)
 
-import asyncio
-from datetime import datetime, timedelta
-import random
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -223,18 +224,15 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user their Telegram ID"""
     user = update.effective_user
-    message = f"*Ваша информация:*\n"
-    message += f"• ID: `{user.id}`\n"
-    message += f"• Имя пользователя: {user.username or 'не указано'}\n"
-    message += f"• Полное имя: {user.full_name}\n\n"
+    message = f"Your Telegram info:\nID: {user.id}"
+    if user.username:
+        message += f"\nUsername: @{user.username}"
+    if user.first_name:
+        message += f"\nFirst Name: {user.first_name}"
+    if user.last_name:
+        message += f"\nLast Name: {user.last_name}"
     
-    if user.id in ADMIN_USER_IDS:
-        message += "Вы являетесь администратором бота"
-    
-    await update.message.reply_text(
-        message,
-        parse_mode=ParseMode.HTML
-    )
+    await update.message.reply_text(message)
 
 async def set_cooldown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set cooldown duration in minutes (admin only)"""
@@ -318,12 +316,6 @@ async def switch_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode=ParseMode.HTML
     )
     logger.info(f"Bot mode changed to: {mode_str} by admin {user_id}")
-
-def convert_markdown_to_html(text):
-    """Convert markdown bold syntax to HTML bold tags."""
-    import re
-    # Replace markdown bold (**text**) with HTML bold (<b>text</b>)
-    return re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and perform tarot reading."""
@@ -414,6 +406,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 else:
                     response = await yandex_gpt.generate_interpretation(cards, question)
+                    # Log successful request
+                    await db.log_request(
+                        user_id=user_id,
+                        username=update.effective_user.username,
+                        question=question,
+                        cards=cards,
+                        success=True
+                    )
+                    logger.info(f"Successful request from user {user_id} with question: {question}")
                     # Escape special characters in the response
                     interpretation = convert_markdown_to_html(escape_html(response if response else CARDS_SILENT))
                     await context.bot.send_message(
@@ -495,7 +496,7 @@ class TarotBot:
         # Initialize handlers
         self.application.add_handler(CommandHandler("start", start))
         self.application.add_handler(CommandHandler("stats", stats_command))
-        self.application.add_handler(CommandHandler("id", id_command))  
+        self.application.add_handler(CommandHandler("id", id_command))
         self.application.add_handler(CommandHandler("set_cooldown", set_cooldown_command))
         self.application.add_handler(CommandHandler("switch_mode", switch_mode_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
