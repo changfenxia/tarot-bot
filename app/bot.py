@@ -307,15 +307,24 @@ async def switch_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    new_mode = await db.toggle_test_mode()
-    mode_str = "тестовый" if new_mode else "обычный"
+    mode = await db.is_test_mode()
+    new_mode = not mode
     
+    await db.set_test_mode(new_mode, user_id)
+    
+    mode_str = "тестовый" if new_mode else "нормальный"
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=f"Режим работы изменен на: {mode_str}",
         parse_mode=ParseMode.HTML
     )
     logger.info(f"Bot mode changed to: {mode_str} by admin {user_id}")
+
+def convert_markdown_to_html(text):
+    """Convert markdown bold syntax to HTML bold tags."""
+    import re
+    # Replace markdown bold (**text**) with HTML bold (<b>text</b>)
+    return re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and perform tarot reading."""
